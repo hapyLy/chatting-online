@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TS chat</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-image: url('https://github.com/hapyLy/picture/blob/main/479ecf36ef05b18cf9b5665e6b7a5bb.png?raw=true');
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+            overflow: hidden; /* 禁止滚动 */
+        }
+        .chat-container {
+            background-color: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(5px);
+            height: 100vh;
+        }
+        #chatArea {
+            height: calc(100vh - 180px);
+            overflow-y: auto;
+        }
+        .message {
+            margin-bottom: 10px;
+            padding: 10px;
+            border-radius: 10px;
+            background-color: rgba(255, 255, 255, 0.5);
+        }
+        .username {
+            font-weight: bold;
+        }
+        .timestamp {
+            font-size: 0.8em;
+            color: #666;
+        }
+        img.preview {
+            max-width: 200px;
+            max-height: 200px;
+            cursor: pointer;
+        }
+        #onlineUsers {
+            height: calc(95vh - 100px);
+            overflow-y: auto;
+        }
+        .online-user {
+            padding: 10px;
+            margin-bottom: 5px;
+            background-color: rgba(255, 255, 255, 0.8);
+            border-radius: 10px;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+        }
+        .online-user:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .user-avatar {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            margin-right: 10px;
+            background-color: #3498db;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-weight: bold;
+        }
+        #roomList {
+            height: calc(80vh - 80px);
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body class="flex items-stretch justify-center min-h-screen p-4">
+    <div class="chat-container w-full max-w-6xl p-6 rounded-lg shadow-lg flex">
+        <!-- 左侧边栏 -->
+        <div class="w-1/4 mr-4 flex flex-col">
+            <!-- 聊天室列表 -->
+            <div class="p-4 bg-white bg-opacity-80 rounded-lg shadow">
+                <h3 class="text-lg font-semibold mb-2">聊天室</h3>
+                <div id="roomList" class="bg-white p-2 rounded"></div>
+                <input type="text" id="roomInput" class="w-full mt-2 p-2 border rounded" placeholder="输入房间名...">
+                <button onclick="createRoom()" class="mt-2 p-2 bg-green-500 text-white rounded hover:bg-green-600 transition duration-300">创建房间</button>
+            </div>
+        </div>
+
+        <!-- 中间主聊天区域 -->
+        <div class="w-1/2 flex flex-col">
+            <div id="chatArea" class="flex-grow mb-4 p-4 bg-white bg-opacity-80 rounded-lg shadow"></div>
+            <div id="loginArea" class="mb-4">
+                <input type="text" id="nameInput" placeholder="输入你的名字" class="w-full p-2 mb-2 border rounded">
+                <button onclick="setName()" class="w-full p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300">登录</button>
+            </div>
+            <div id="messageArea" class="hidden">
+                <input type="text" id="messageInput" placeholder="输入消息..." class="w-full p-2 mb-2 border rounded">
+                <div class="flex justify-between items-center">
+                    <input type="file" id="fileInput" class="p-2 border rounded">
+                    <button onclick="sendMessage()" class="p-2 bg-green-500 text-white rounded hover:bg-green-600 transition duration-300">发送</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧在线用户列表 -->
+        <div class="w-1/4 ml-4">
+            <div class="p-4 bg-white bg-opacity-80 rounded-lg shadow ">
+                <h3 class="text-lg font-semibold mb-2">在线用户</h3>
+                <div id="onlineUsers" class="bg-white p-2 rounded"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let socket;
+        const chatArea = document.getElementById('chatArea');
+        const nameInput = document.getElementById('nameInput');
+        const messageInput = document.getElementById('messageInput');
+        const fileInput = document.getElementById('fileInput');
+        const loginArea = document.getElementById('loginArea');
+        const messageArea = document.getElementById('messageArea');
+        const onlineUsers = document.getElementById('onlineUsers');
+        const roomList = document.getElementById('roomList');
+        const roomInput = document.getElementById('roomInput');
+        let userName = '';
+        let currentRoom = 'General';
+        let chatHistory = {};
+
+        function connectWebSocket() {
+            socket = new WebSocket('ws://172.23.72.235:8765');
+
+            socket.onopen = function(event) {
+                console.log('WebSocket连接已建立');
+                displaySystemMessage('已连接到服务器');
+                if (userName) {
+                    sendMessage({type: 'setName', name: userName, room: currentRoom});
+                }
+            };
+
+            // 修改 socket.onmessage 事件处理
+        socket.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            if (data.type === 'userList') {
+                updateOnlineUsers(data.users);
+            } else if (data.type === 'roomList') {
+                updateRoomList(data.rooms);
+         } else {
+                displayMessage(data);
+            }
+        };
+
+            socket.onclose = function(event) {
+                console.log('WebSocket连接已关闭');
+                displaySystemMessage('与服务器的连接已断开，正在尝试重新连接...');
+                setTimeout(connectWebSocket, 5000);
+            };
+
+            socket.onerror = function(error) {
+                console.error('WebSocket错误:', error);
+                displaySystemMessage('发生错误，请检查您的网络连接');
+            };
+        }
+
+        connectWebSocket();
+
+        function updateOnlineUsers(users) {
+            onlineUsers.innerHTML = users.map(user => `
+                <div class="online-user">
+                    <div class="user-avatar">${user.charAt(0).toUpperCase()}</div>
+                    <span>${user}</span>
+                </div>
+            `).join('');
+        }
+
+
+        // 更新 updateRoomList 函数
+        function updateRoomList(rooms) {
+    const generalRoom = `
+        <div class="room-item p-2 mb-4 bg-blue-100 rounded cursor-pointer hover:bg-blue-200" onclick="joinRoom('General')">
+            <div class="flex justify-between items-center">
+                <span class="font-bold">General</span>
+                <span class="text-sm text-gray-500">创建者: ${rooms['General'].creator}</span>
+            </div>
+        </div>
+    `;
+    
+    const otherRooms = Object.entries(rooms)
+        .filter(([roomName]) => roomName !== 'General')
+        .map(([roomName, info]) => `
+            <div class="room-item p-2 mb-2 bg-gray-100 rounded cursor-pointer hover:bg-gray-200" onclick="joinRoom('${roomName}')">
+                <div class="flex justify-between items-center">
+                    <span>${roomName}</span>
+                    <span class="text-sm text-gray-500">创建者: ${info.creator}</span>
+                </div>
+            </div>
+        `).join('');
+    
+    roomList.innerHTML = generalRoom + otherRooms;
+}
+        function getColorForUser(name) {
+            let hash = 0;
+            for (let i = 0; i < name.length; i++) {
+                hash = name.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            const c = (hash & 0x00FFFFFF).toString(16).toUpperCase();
+            return "#" + "00000".substring(0, 6 - c.length) + c;
+        }
+
+        function formatTimestamp(date) {
+            return date.toLocaleString('zh-CN', { 
+                year: 'numeric', 
+                month: '2-digit', 
+                day: '2-digit', 
+                hour: '2-digit', 
+                minute: '2-digit', 
+                second: '2-digit' 
+            });
+        }
+
+        function displayMessage(data) {
+            const message = document.createElement('div');
+            message.className = 'message';
+            
+            const timestamp = formatTimestamp(new Date());
+            
+            if (data.name) {
+                const userColor = getColorForUser(data.name);
+                message.innerHTML = `
+                    <span class="username" style="color: ${userColor}">${data.name}:</span>
+                    <span class="timestamp">${timestamp}</span><br>
+                `;
+                if (data.type === 'file') {
+                    const fileContent = data.content.split(',')[1];
+                    const blob = b64toBlob(fileContent, data.fileType);
+                    const blobUrl = URL.createObjectURL(blob);
+                    
+                    if (data.fileType.startsWith('image/')) {
+                        message.innerHTML += `<img src="${blobUrl}" alt="图片" class="preview" onclick="downloadFile('${blobUrl}', '${data.fileName}')"><br>`;
+                        message.innerHTML += `<a href="${blobUrl}" download="${data.fileName}" class="text-blue-500 hover:underline">下载 ${data.fileName}</a>`;
+                    } else {
+                        message.innerHTML += `<a href="${blobUrl}" download="${data.fileName}" class="text-blue-500 hover:underline">下载 ${data.fileName}</a>`;
+                    }
+                } else {
+                    message.innerHTML += data.content;
+                }
+            } else {
+                message.innerHTML = `
+                    <span class="timestamp">${timestamp}</span><br>
+                    ${data.content}
+                `;
+            }
+            
+            chatArea.appendChild(message);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+
+        function displaySystemMessage(content) {
+            displayMessage({content: content});
+        }
+
+        function setName() {
+            userName = nameInput.value.trim();
+            if (userName) {
+                sendMessage({type: 'setName', name: userName, room: currentRoom});
+                loginArea.classList.add('hidden');
+                messageArea.classList.remove('hidden');
+            }
+        }
+
+        function sendMessage(data = null) {
+            if (!data) {
+                const message = messageInput.value.trim();
+                const file = fileInput.files[0];
+                
+                if (message) {
+                    data = {type: 'message', content: message, room: currentRoom};
+                } else if (file) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const base64 = e.target.result;
+                        sendMessage({
+                            type: 'file',
+                            content: base64,
+                            fileName: file.name,
+                            fileType: file.type,
+                            room: currentRoom
+                        });
+                    };
+                    reader.readAsDataURL(file);
+                    fileInput.value = '';
+                    return;
+                } else {
+                    return;
+                }
+            }
+
+            if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify(data));
+                if (data.type === 'message') {
+                    messageInput.value = '';
+                }
+            } else {
+                displaySystemMessage('无法发送消息，请检查您的网络连接');
+            }
+        }
+
+        function b64toBlob(b64Data, contentType = '', sliceSize = 512) {
+            const byteCharacters = atob(b64Data);
+            const byteArrays = [];
+
+            for (let offset = 0; offset < byteCharacters.length; offset += sliceSize) {
+                const slice = byteCharacters.slice(offset, offset + sliceSize);
+                const byteNumbers = new Array(slice.length);
+                for (let i = 0; i < slice.length; i++) {
+                    byteNumbers[i] = slice.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNumbers);
+                byteArrays.push(byteArray);
+            }
+
+            const blob = new Blob(byteArrays, {type: contentType});
+            return blob;
+        }
+
+        function downloadFile(blobUrl, fileName) {
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        function createRoom() {
+            const roomName = roomInput.value.trim();
+            if (roomName) {
+                sendMessage({type: 'createRoom', name: roomName});
+                roomInput.value = '';
+            }
+        }
+
+        // 添加房间名称显示的元素
+        const roomTitle = document.createElement('div');
+        roomTitle.className = 'text-xl font-bold mb-4 text-center';
+        chatArea.parentNode.insertBefore(roomTitle, chatArea);
+
+        socket.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            if (data.type === 'userList') {
+                updateOnlineUsers(data.users);
+            } else if (data.type === 'roomList') {
+                updateRoomList(data.rooms);
+            } else if (data.type === 'currentRoom') {
+                roomTitle.textContent = `当前房间: ${data.name}`;
+            } else {
+                displayMessage(data);
+            }
+        };
+
+        function joinRoom(roomName) {
+            currentRoom = roomName;
+            roomTitle.textContent = `当前房间: ${roomName}`;
+            chatArea.innerHTML = '';
+            sendMessage({type: 'joinRoom', name: roomName});
+        }
+
+        nameInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                setName();
+            }
+        });
+
+        messageInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        noteInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                addNote();
+            }
+        });
+
+        roomInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                createRoom();
+            }
+        });
+    </script>
+</body>
+</html>
